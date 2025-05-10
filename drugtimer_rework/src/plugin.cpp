@@ -1,4 +1,4 @@
-#include "plugin.h"
+﻿#include "plugin.h"
 #include <game_api.h>
 #include <chrono>
 #include <thread>
@@ -6,32 +6,90 @@
 
 std::unique_ptr<SAMPFUNCS> SF;
 
-class DrugTimer {
-public:
-	bool isReadyToUse = true, useAfterDeath = false, stop = false;
-	int coolDown = 60;
-	std::chrono::milliseconds noFloodMS = std::chrono::milliseconds(1000);
-	void _stdcall countDown() {
-		int len = coolDown;
-		for (int i = 0; i < len; i++) {
-			std::this_thread::sleep_for(noFloodMS);
-			coolDown--;
-			if (isReadyToUse) {
-				coolDown = 60;
-				return;
-			}
-		}
-		coolDown = 60;
-		isReadyToUse = true;
-		SF->getSAMP()->getChat()->AddChatMessage(D3DCOLOR_XRGB(213, 240, 218), "{d5f0da}[drugTimer]: {25f54b}Drugs Are Ready{a6a298}.");
+bool boolAfterDeath = false, stop = false;
+int coolDown = 60;
+std::chrono::milliseconds noFloodMS = std::chrono::milliseconds(1000);
+bool isReadyToUse = true;
+
+	// проверка на использование
+bool NoFloodCheck() {
+	setlocale(LC_ALL, "1251");
+	bool nfldBool = false;
+	std::this_thread::sleep_for(std::chrono::milliseconds(300));
+	std::ifstream file(SF->getSAMP()->getChat()->logFilePathChatLog);
+	if (!file.is_open()) {
+		SF->Log("[gTool]: File wasn't open");
+		return true;
 	}
-	bool NoFloodCheck() {
-		bool nfldBool = false;
-		std::this_thread::sleep_for(std::chrono::milliseconds(300));
+	std::deque <std::string> lines;
+	std::string line;
+	while (std::getline(file, line)) {
+		lines.push_back(line);
+		if (lines.size() > static_cast<size_t>(5)) {
+			lines.pop_front();
+		}
+	}
+	std::string toFindString = SF->getSAMP()->getPlayers()->localPlayerNickName;
+	for (std::string x : lines) {
+		if (x.find(toFindString) != std::string::npos) {
+			nfldBool = true;
+		}
+	}
+	file.close();
+	return nfldBool;
+}
+		// использование после смерти
+void CALLBACK useAfterDeath() {
+int actorState = (SF->getSAMP()->getPlayers()->localPlayerData->sampActor->gtaPed->hitpoints);
+if (actorState == 0) {
+		isReadyToUse = true;
+			if (boolAfterDeath && !stop) {
+			// использование нарко во время смерти спустя секкунду
+			std::thread([=] {
+				char* cmd = "/usedrugs 16";
+				std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+				SF->getSAMP()->getPlayers()->localPlayerData->Say(cmd);
+				if (!NoFloodCheck()) {
+					SF->getSAMP()->getPlayers()->localPlayerData->Say(cmd);
+				}
+				}).detach();
+				stop = true;
+			// отсчёт 4 секунды на смерть
+			std::thread([&] {
+				std::this_thread::sleep_for(std::chrono::seconds(4));
+				stop = false;
+				}).detach();
+		}
+	}
+}
+	// отсчёт до 60 секунд
+void _stdcall countDown() {
+	int len = coolDown;
+	for (int i = 0; i < len; i++) {
+		std::this_thread::sleep_for(noFloodMS);
+		coolDown--;
+		if (isReadyToUse) {
+			coolDown = 60;
+			return;
+		}
+	}
+	coolDown = 60;
+	isReadyToUse = true;
+	SF->getSAMP()->getChat()->AddChatMessage(D3DCOLOR_XRGB(213, 240, 218), "{d5f0da}[drugTimer]: {25f54b}Drugs Are Ready{a6a298}.");
+}
+	// использование 
+void CALLBACK useDrugs() {
+	if (isReadyToUse) {
+		int hp = SF->getSAMP()->getPlayers()->localPlayerData->sampActor->gtaPed->hitpoints;
+		int needToUse = (160 - hp) / 10 + 1;
+		std::string commandLine = "/usedrugs ";
+		std::string needToUseString = std::to_string(needToUse);
+		commandLine += needToUseString;
+		SF->getSAMP()->getPlayers()->localPlayerData->Say((char*)commandLine.data());
 		std::ifstream file(SF->getSAMP()->getChat()->logFilePathChatLog);
 		if (!file.is_open()) {
 			SF->Log("[gTool]: File wasn't open");
-			return true;
+			//return true;
 		}
 		std::deque <std::string> lines;
 		std::string line;
@@ -41,22 +99,38 @@ public:
 				lines.pop_front();
 			}
 		}
-
-		std::string toFindString = SF->getSAMP()->getPlayers()->localPlayerNickName + " ���������";
-		for (std::string& x : lines) {
-			if (x.find(toFindString) != std::string::npos) {
-				nfldBool = true;
-			}
+		std::thread([=]{
+		SF->Log("Nofloodcheck 1");
+		if (!NoFloodCheck()) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+			SF->Log("Nofloodcheck 2");
+			SF->getSAMP()->getPlayers()->localPlayerData->Say((char*)commandLine.data());
 		}
-		file.close();
-		return nfldBool;
+			}).detach();
+		isReadyToUse = false;
+		std::thread drugTimerThread(countDown);
+		drugTimerThread.detach();
+}
+	else {
+		SF->getSAMP()->getChat()->AddChatMessage(-1, "{d5f0da}[drugTimer]: {a6a298}Are Not Ready, Wait For %d Seconds.", coolDown);
 	}
+}
 
-};
+// включить отключить после смерти
+void __stdcall turnOnOffAfterDeath() {
+	if (boolAfterDeath) {
+		boolAfterDeath = false;
+		SF->getSAMP()->getChat()->AddChatMessage(-1, "{d5f0da}[drugTimer]: {a6a298}Auto Use After Death is {f70a0a}OFF{d5f0da}.");
+	}
+	else {
+		boolAfterDeath = true;
+		SF->getSAMP()->getChat()->AddChatMessage(-1, "{d5f0da}[drugTimer]: {a6a298}Auto Use After Death is {25f54b}ON{d5f0da}.");
+	}
+}
 
 
 
-std::unique_ptr<DrugTimer> drugTimer = std::make_unique<DrugTimer>();
+
 
 static void CALLBACK mainloop() {
 	static bool initialized = false;
@@ -70,86 +144,37 @@ static void CALLBACK mainloop() {
 	}
 	else {
 		if (SF->getSAMP()->getInfo()->gameState == GAMESTATE_CONNECTED) {
-			// ����������
-			if (SF->getGame()->isKeyPressed(88)) {
-				if (drugTimer->isReadyToUse) {
-					int hp = SF->getSAMP()->getPlayers()->localPlayerData->sampActor->gtaPed->hitpoints;
-					int needToUse = (160 - hp) / 10 + 1;
-					std::string commandLine = "/usedrugs ";
-					std::string needToUseString = std::to_string(needToUse);
-					commandLine += needToUseString;
-					SF->getSAMP()->getPlayers()->localPlayerData->Say((char*)commandLine.data());
-					std::thread([=] { 
-						if (!drugTimer->NoFloodCheck()) {
-							std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-							SF->getSAMP()->getPlayers()->localPlayerData->Say((char*)commandLine.data());
-						}
-						}).detach();
-					drugTimer->isReadyToUse = false;
-					std::thread drugTimerThread([&] {drugTimer->countDown();});
-					drugTimerThread.detach();
-				}
-				else {
-					SF->getSAMP()->getChat()->AddChatMessage(-1, "{d5f0da}[drugTimer]: {a6a298}Are Not Ready, Wait For %d Seconds.", drugTimer->coolDown);
-				}
-			}
-
-
-			int actorState = (SF->getSAMP()->getPlayers()->localPlayerData->sampActor->gtaPed->hitpoints);
 			uint carState = (SF->getSAMP()->getPlayers()->localPlayerData->sampActor->gtaPed->state);
-			if (actorState == 0) {
-				drugTimer->isReadyToUse = true;
-				
-				if (drugTimer->useAfterDeath && !drugTimer->stop) {
-					
-					std::thread([=] {
-						char* cmd = "/usedrugs 16";
-						std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-						SF->getSAMP()->getPlayers()->localPlayerData->Say(cmd);
-						if (!drugTimer->NoFloodCheck()) {
-							SF->getSAMP()->getPlayers()->localPlayerData->Say(cmd);
-						}
-						}).detach();
-
-					drugTimer->stop = true;
-					// ������ 4 ������� �� ������
-					std::thread([&] { std::this_thread::sleep_for(std::chrono::seconds(4)); drugTimer->stop = false;}).detach();
-				}
+			
+			if (SF->getGame()->isKeyPressed(88)) {
+				useDrugs();
 			}
 			if (SF->getGame()->isKeyPressed(52)) {
-				if (drugTimer->useAfterDeath) {
-					drugTimer->useAfterDeath = false;
-					SF->getSAMP()->getChat()->AddChatMessage(-1, "{d5f0da}[drugTimer]: {a6a298}Auto Use After Death is {f70a0a}OFF{d5f0da}.");
-				}
-				else {
-					drugTimer->useAfterDeath = true;
-					SF->getSAMP()->getChat()->AddChatMessage(-1, "{d5f0da}[drugTimer]: {a6a298}Auto Use After Death is {25f54b}ON{d5f0da}.");
-				}
+				turnOnOffAfterDeath();
 			}
-			// ������
+			// тройка
 			else if (SF->getGame()->isKeyPressed(51)) {
 				PEDSELF->Teleport(PEDSELF->GetPosition()->fX, PEDSELF->GetPosition()->fY, PEDSELF->GetPosition()->fZ);
 			}
-			// ����� �����
+			// крафт дигла
 			else if (SF->getGame()->isKeyPressed(90) && carState != 50) {
 				SF->getSAMP()->getPlayers()->localPlayerData->Say("/de 10");
 			}
 			// /lock
 			else if (SF->getGame()->isKeyPressed(76)) {
 				SF->getSAMP()->getPlayers()->localPlayerData->Say("/lock");
-
 			}
-			// ����� �����
+			// крафт рифлы
 			else if (SF->getGame()->isKeyPressed(50) && carState != 50) {
 				SF->getSAMP()->getPlayers()->localPlayerData->Say("/ri 10");
 			}
-			
+			useAfterDeath();
 		}
 		else {
-			drugTimer->isReadyToUse = true;
+			isReadyToUse = true;
 		}
-
 	}
+	
 }
 
 
